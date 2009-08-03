@@ -883,6 +883,75 @@ linfit(vector<int>x,vector<int>y)
 }
 
 
+// hough transform stuff
+enum{
+    NTHETA=136,
+    NRHO=138
+};
+
+unsigned char hough_buf[NTHETA*NRHO];
+unsigned int hough_hist[NTHETA*NRHO]; 
+
+const double 
+theta_min=-M_PI/2,
+  theta_max=M_PI/2,
+  rho_max=M_SQRT2*512,
+  rho_min=-rho_max;
+
+// linear interpolation
+inline double
+stretch(int i,int n,double min,double max)
+{
+  double t=i*1./n;
+  return (1-t)*min+t*max;
+}
+
+inline double
+stretch_inclusive(int i,int n,double min,double max)
+{
+  double t=i*1./(n-1);
+  return (1-t)*min+t*max;
+}
+
+inline double
+theta(int i)
+{
+  return stretch(i,NTHETA,theta_min,theta_max);
+}
+
+inline double
+rho(int i)
+{
+  return stretch_inclusive(i,NRHO,rho_min,rho_max);
+}
+
+#include <string.h>
+double cos_tab[NTHETA],sin_tab[NTHETA];
+void clear_hough()
+{
+  memset(hough_hist,0,sizeof(hough_hist));
+}
+void init_hough()
+{
+  clear_hough();
+  for(int i=0;i<NTHETA;i++){
+    double t=theta(i);
+    cos_tab[i]=cos(t);
+    sin_tab[i]=sin(t);
+  }
+}
+
+void
+insert_hough(int x,int y,unsigned int*hist)
+{
+  const static double sfrho=NRHO*1./(rho_max-rho_min);
+  for(int i=0;i<NTHETA;i++){
+    double rho=x*cos_tab[i]+y*sin_tab[i];
+    hist[i+NTHETA*((int)((rho-rho_min)*sfrho))]++;
+  }
+}
+
+
 int
 main()
 {
@@ -891,13 +960,13 @@ main()
   Camera cam;
 
   vector<Quad> coord;
-  for(int i=1080;i>=0;i-=20){
+  for(int i=800;i>=480;i-=20){ // 1080
     int q[]={0,0,g.w,i};
     coord.push_back(Quad(q));
     int p[]={0,g.h,g.w,i};
     coord.push_back(Quad(p));
   } 
-  for(int i=0;i<1920;i+=20){
+  for(int i=600;i<1000;i+=20){ // 1920
     int q[]={0,0,i,g.h};
     coord.push_back(Quad(q));
     int p[]={i,0,g.w,g.h};
@@ -924,7 +993,7 @@ main()
   doall1d(inverse,
 	  int diff=bright[i]-dark[i];
 	  double s=1./diff;
-	  if(diff<3*dark[i])
+	  if(s*bright[i]<1.1)
 	    bright[i]=0; // special value marking low contrast regions
 	  inverse[i]=s;);
   
@@ -932,7 +1001,9 @@ main()
   write_pgm(bright,"br.pgm");
   
   Image<unsigned char> corrected(n,n),accum(n,n),halfaccum(n,n);
-  
+
+  init_hough();
+
   for(int cnt=0;;cnt++){
       
     cam.capture();
@@ -958,6 +1029,9 @@ main()
     if(cnt%2==1){
       doall1d(accum,accum[i]=halfaccum[i]);
     } else {
+      // combine two consecutive (inverted) frames to find the center
+      // line, pixels near the line will be black (0), pixels that
+      // have a low contrast are set to 100
       doall1d(accum,
 	      if(bright[i]){
 		accum[i]=255*(accum[i] ^ halfaccum[i]);
@@ -965,15 +1039,55 @@ main()
 		accum[i]=100;
 	      }
 	      );
+      // do hough transform of all black pixels (pixels on the center
+      // line, that are known to have high contrast)
       vector<int>x,y;
       int l=0;
+      clear_hough();
       for(int i=0;i<n;i++)
 	for(int j=0;j<n;j++){
 	  if(accum[l++]==0 && bright[i]){
-	    x.push_back(i);
-	    y.push_back(j);
+	    insert_hough(i,j,hough_hist);
+	    //x.push_back(i);
+	    //y.push_back(j);
 	  }
 	}
+      
+      // find maximum in hough transform (marks the most prominent line)
+      int max=hough_hist[0],maxtheta=0,maxrho=0;
+      l=0;
+      for(int j=0;j<NRHO;j++)
+	for(int i=0;i<NTHETA;i++){
+	  int v=hough_hist[l++];
+	  if(v>max){
+	    max=v;
+	    maxtheta=i;
+	    maxrho=j;
+	  }
+	}
+      cout << "maxtheta=" << maxtheta
+	   << " maxrho=" << maxrho << endl;
+      
+      // scale the hough transform image to 0..255
+      for(int i=0;i<NTHETA*NRHO;i++){
+	int v=hough_hist[i];
+	unsigned char c=(unsigned char)(v*255./max);
+	//    unsigned char c=(unsigned char)v==0?0:log(v)*255./log(max);
+	hough_buf[i]=c;
+      }
+      
+      // mark the maximum in the hough transform image
+      for(int i=-6;i<=6;i++)
+	hough_buf[maxtheta+i+NTHETA*maxrho]=255;
+      for(int i=-6;i<=6;i++)
+	hough_buf[maxtheta+NTHETA*(maxrho+i)]=255;
+      
+      // output hough transform image to file
+      FILE*f=fopen("hough.pgm","w");
+      fprintf(f,"P5\n%d %d\n255\n",NTHETA,NRHO);
+      fwrite(hough_buf,NTHETA,NRHO,f);
+      fclose(f);
+
       if(x.size()>100){
 	pair<double,double> parm= linfit(x,y);
 	double a=parm.first, b=parm.second;
