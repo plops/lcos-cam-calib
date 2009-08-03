@@ -603,7 +603,7 @@ public:
     pl_exp_init_seq();
     const rgn_type region={0,511,1,0,511,1};
     uns32 size;
-    const uns32 exptime=10; // depending on time resolution // perhaps millisecond
+    const uns32 exptime=90; // depending on time resolution // perhaps millisecond
     // PARAM_EXP_RES and PARAM_EXP_RES_INDEX
     const int triggermode=TIMED_MODE;//TRIGGER_FIRST_MODE;
     pl_exp_setup_seq(hCam,1,1,&region,triggermode,exptime,&size);
@@ -1056,13 +1056,13 @@ main()
   Camera cam;
 
   vector<Quad> coord;
-  for(int i=860;i>=480;i-=2){ // 1080
+  for(int i=860;i>=480;i-=20){ // 1080
     int q[]={0,0,g.w,i};
     coord.push_back(Quad(q));
     int p[]={0,g.h,g.w,i};
     coord.push_back(Quad(p));
   } 
-  for(int i=540;i<1000;i+=2){ // 1920
+  for(int i=540;i<1000;i+=20){ // 1920
     int q[]={0,0,i,g.h};
     coord.push_back(Quad(q));
     int p[]={i,0,g.w,g.h};
@@ -1089,7 +1089,7 @@ main()
   doall1d(inverse,
 	  int diff=bright[i]-dark[i];
 	  double s=1./diff;
-	  if(s*bright[i]<1.1)
+	  if(bright[i]/(bright[i]-dark[i])>2)
 	    bright[i]=0; // special value marking low contrast regions
 	  inverse[i]=s;);
   
@@ -1258,33 +1258,47 @@ main()
       // store horizontal lines and the coordinates that were
       // displayed into file
       FILE*f=fopen("hor.dat","w");
-      fprintf(f,"#coord.0 .1 .2 .3 par_hor.a .b\n");  
-      for(int i=0;i<cnt_hor.size();i++){
-	fprintf(f,"%d %d %d %d %g %g\n",
-		coord[cnt_hor[i]].a[0],
-		coord[cnt_hor[i]].a[1],
-		coord[cnt_hor[i]].a[2],
+      fprintf(f,"#coord.3 par_hor.a .b\n");  
+      for(int i=0;i<cnt_hor.size();i++)
+	fprintf(f,"%d %g %g\n",
 		coord[cnt_hor[i]].a[3],
-		par_hor[cnt_hor[i]].first,
-		par_hor[cnt_hor[i]].second);
-      }
+		par_hor[i].first,
+		par_hor[i].second);
       fclose(f);
      
       // store vertical lines and the coordinates that were
       // displayed into file
       f=fopen("ver.dat","w");
-      fprintf(f,"#coord.0 .1 .2 .3 par_ver.a .b\n");  
-      for(int i=0;i<cnt_ver.size();i++){
-	fprintf(f,"%d %d %d %d %g %g\n",
-		coord[cnt_ver[i]].a[0],
-		coord[cnt_ver[i]].a[1],
-		coord[cnt_ver[i]].a[2],
-		coord[cnt_ver[i]].a[3],
-		par_ver[cnt_ver[i]].first,
-		par_ver[cnt_ver[i]].second);
-      }
+      fprintf(f,"#coord.2 par_ver.a .b\n");  
+      for(int i=0;i<cnt_ver.size();i++)
+	fprintf(f,"%d %g %g\n",
+		coord[cnt_ver[i]].a[2], // only this one matters
+		par_ver[i].first,
+		par_ver[i].second);
       fclose(f);
       
+      // find intersections of vertical and horizontal lines
+      // (1) y=ax+b AND (2) x=cy+d -> y=(ad+b)/(1-ac), (2) gives x
+      f=fopen("intersections.dat","w");
+      for(unsigned int i=0;i<par_hor.size();i++)
+	for(unsigned int j=0;j<par_ver.size();j++){
+	  // evalutate intersection calculation
+	  double
+	    a=par_hor[i].second,
+	    b=par_hor[i].first,
+	    c=par_ver[j].second,
+	    d=par_ver[j].first,
+	    y=(a*d+b)/(1-a*c),
+	    x=c*y+d;
+	  // what lines were displayed on the device?
+	  int 
+	    // horizontal (could be 0..1920)
+	    I=coord[cnt_hor[i]].a[3],
+	    // vertical (could be 0..1080)
+	    J=coord[cnt_ver[j]].a[2];
+	  fprintf(f,"%d %d %g %g\n",I,J,x,y);
+	}
+      fclose(f);
     }
     int*q=coord[cnt].a;
     //glRecti(0,0,700,g.h);
