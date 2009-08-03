@@ -850,39 +850,6 @@ public:
   }
 };
 
-/** line fitting
-    http://mathworld.wolfram.com/LeastSquaresFitting.html
-    return a,b y=a+bx
-*/
-#include <utility>
-class FitError{};
-pair<double,double>
-linfit(vector<int>x,vector<int>y)
-{
-  if(x.size()!=y.size())
-    throw FitError();
-  int n=x.size();
-  double xbar=0,x2=0;
-  for(int i=0;i<n;i++){
-    xbar+=x[i]/n;
-    x2+=x[i]*x[i];
-  }
-  double ssxx=x2-n*xbar*xbar;
-  double ybar=0,y2=0;
-  for(int i=0;i<n;i++){
-    ybar+=y[i]/n;
-    y2=y[i]*y[i];
-  }
-  double ssyy=y2-n*ybar*ybar;
-  double xy=0;
-  for(int i=0;i<n;i++)
-    xy+=x[i]*y[i];
-  double ssxy=xy-n*xbar*ybar;
-  double b=ssxy/ssxx, a=ybar-b*xbar; // r2=ssxy*ssxy/(ssxx*ssyy);
-  return pair<double,double>(a,b);
-}
-
-
 // hough transform stuff
 enum{
     NTHETA=136,
@@ -951,6 +918,135 @@ insert_hough(int x,int y,unsigned int*hist)
   }
 }
 
+// least squares line fitting
+
+// collect points that are in the bin [maxtheta,maxrho] of the hough transform
+void
+extract_line_points(int maxtheta,int maxrho,vector<int>&x,vector<int>&y,
+		    Image<unsigned char>&p)
+{
+  const static double sfrho=NRHO*1./(rho_max-rho_min);
+  for(int j=0;j<p.h;j++)
+    for(int i=0;i<p.w;i++){
+      if(p(i,j)==0){
+        double rho=j*cos_tab[maxtheta]+i*sin_tab[maxtheta];
+        int irho=(int)((rho-rho_min)*sfrho);
+        if(maxrho==irho){
+          x.push_back(i);
+          y.push_back(j);
+        }
+      }
+    }
+}
+double
+calc_avg(vector<int>x)
+{
+  double sum=0;
+  for(unsigned int i=0;i<x.size();i++)
+    sum+=x[i];
+  return sum/x.size();
+}
+
+double
+calc_x2(vector<int>x)
+{
+  double sum=0;
+  for(unsigned int i=0;i<x.size();i++)
+    sum+=x[i]*x[i];
+  return sum;
+}
+
+double
+calc_xy(vector<int>x,vector<int>y)
+{
+  double sum=0;
+  for(unsigned int i=0;i<x.size();i++)
+    sum+=x[i]*y[i];
+  return sum;
+}
+
+class Error{};
+// y=a+b*x  -> find a and b
+double
+fit_line(vector<int>x,vector<int>y,double&a,double&b)
+{
+  if(x.size()!=y.size() || x.size()==0)
+    throw Error();
+  int n=x.size();
+  double 
+    xbar=calc_avg(x),x2=calc_x2(x),
+    ybar=calc_avg(y),y2=calc_x2(y),
+    xy=calc_xy(x,y);
+  double
+    ssxx=x2-n*xbar*xbar,
+    ssyy=y2-n*ybar*ybar,
+    ssxy=xy-n*xbar*ybar;
+  /*  cout << "xbar=" << xbar << " ybar="
+       << ybar << " x2="
+       << x2 << " y2="
+       << y2 << " xy="
+       << xy << " ssxx="
+       << ssxx << " ssxy="
+       << ssxy << " "<<endl;
+  */
+  b=ssxy/ssxx;
+  //cout<<"b="<<b<<endl;
+  a=ybar-b*xbar;
+  //cout<<"a="<<a<<endl;
+  double r2=ssxy*ssxy/(ssxx*ssyy);
+  /* cout<<"correlation coeff r^2="
+      <<r2
+      <<" proportion of ssyy which is accounted for by the refgression"
+      <<endl;
+  */
+return r2;
+}
+
+
+// x=a+b*y
+void
+draw_line_vert(double a,double b,Image<unsigned char>&p)
+{
+  for(int i=0;i<p.h;i++){ 
+    double x=a+b*i;
+     int ix=(int)x;
+    if(ix>=3 && ix<p.w-3){
+      p(ix-3,i)=128;
+      p(ix+3,i)=128;
+    } 
+  }  
+}
+
+// y=a+b*x
+void
+draw_line_hori(double a,double b,Image<unsigned char>&p)
+{
+  for(int i=0;i<p.w;i++){ 
+    double y=a+b*i;
+    int iy=(int)y;
+    if(iy>=3 && iy<p.h-3){
+      p(i,iy-3)=128; 
+      p(i,iy+3)=128; 
+    }
+  }  
+}
+
+// y=a+b*x
+void draw_hor(pair<double,double>p)
+{
+  double a=p.first,b=p.second,x=0;
+  glVertex2d(x,512-(a+b*x)); // in y 512-.. because of coordinate systems!
+  x=512;
+  glVertex2d(x,512-(a+b*x));
+}
+// x=a+b*y
+void draw_ver(pair<double,double>p)
+{
+  double a=p.first,b=p.second,y=0;
+  glVertex2d(a+b*y,512-y); // in y 512-.. because of coordinate systems!
+  y=512;
+  glVertex2d(a+b*y,512-y);
+}
 
 int
 main()
@@ -960,19 +1056,19 @@ main()
   Camera cam;
 
   vector<Quad> coord;
-  for(int i=800;i>=480;i-=20){ // 1080
+  for(int i=860;i>=480;i-=2){ // 1080
     int q[]={0,0,g.w,i};
     coord.push_back(Quad(q));
     int p[]={0,g.h,g.w,i};
     coord.push_back(Quad(p));
   } 
-  for(int i=600;i<1000;i+=20){ // 1920
+  for(int i=540;i<1000;i+=2){ // 1920
     int q[]={0,0,i,g.h};
     coord.push_back(Quad(q));
     int p[]={i,0,g.w,g.h};
     coord.push_back(Quad(p));
   } 
-  
+
   glClearColor(1,1,1,1);
   glClear(GL_COLOR_BUFFER_BIT);
   SDL_GL_SwapBuffers();
@@ -1004,8 +1100,10 @@ main()
 
   init_hough();
 
-  for(int cnt=0;;cnt++){
-      
+  vector<pair<double, double> > par_hor,par_ver; // line parameters
+  vector<int> cnt_hor,cnt_ver; // to store the current value of cnt
+
+  for(int cnt=0;;cnt++){    
     cam.capture();
   
     glClear(GL_COLOR_BUFFER_BIT);
@@ -1046,11 +1144,12 @@ main()
       clear_hough();
       for(int i=0;i<n;i++)
 	for(int j=0;j<n;j++){
-	  if(accum[l++]==0 && bright[i]){
+	  if(accum[l]==0 && bright[l]){
 	    insert_hough(i,j,hough_hist);
 	    //x.push_back(i);
 	    //y.push_back(j);
 	  }
+	  l++;
 	}
       
       // find maximum in hough transform (marks the most prominent line)
@@ -1065,38 +1164,85 @@ main()
 	    maxrho=j;
 	  }
 	}
-      cout << "maxtheta=" << maxtheta
-	   << " maxrho=" << maxrho << endl;
+      cout << "#points in max bin=" << max 
+	   << " maxtheta=" << theta(maxtheta)*180/M_PI << " degree"
+	   << " maxrho=" << rho(maxrho) << " pixels" << endl;
       
-      // scale the hough transform image to 0..255
-      for(int i=0;i<NTHETA*NRHO;i++){
-	int v=hough_hist[i];
-	unsigned char c=(unsigned char)(v*255./max);
-	//    unsigned char c=(unsigned char)v==0?0:log(v)*255./log(max);
-	hough_buf[i]=c;
-      }
-      
-      // mark the maximum in the hough transform image
-      for(int i=-6;i<=6;i++)
-	hough_buf[maxtheta+i+NTHETA*maxrho]=255;
-      for(int i=-6;i<=6;i++)
-	hough_buf[maxtheta+NTHETA*(maxrho+i)]=255;
-      
-      // output hough transform image to file
-      FILE*f=fopen("hough.pgm","w");
-      fprintf(f,"P5\n%d %d\n255\n",NTHETA,NRHO);
-      fwrite(hough_buf,NTHETA,NRHO,f);
-      fclose(f);
-
-      if(x.size()>100){
-	pair<double,double> parm= linfit(x,y);
-	double a=parm.first, b=parm.second;
-	cout << x.size() << " "<< a << " " << b << endl;
+      // only do the following if some points are found
+      if(max){
+	// scale the hough transform image to 0..255
+	for(int i=0;i<NTHETA*NRHO;i++){
+	  int v=hough_hist[i];
+	  unsigned char c=(unsigned char)(v*255./max);
+	  //    unsigned char c=(unsigned char)v==0?0:log(v)*255./log(max);
+	  hough_buf[i]=c;
+	}
+	
+	if(0){
+	  // mark the maximum in the hough transform image
+	  for(int i=-6;i<=6;i++)
+	    hough_buf[maxtheta+i+NTHETA*maxrho]=255;
+	  for(int i=-6;i<=6;i++)
+	    hough_buf[maxtheta+NTHETA*(maxrho+i)]=255;
+	  
+	  // output hough transform image to file
+	  FILE*f=fopen("hough.pgm","w");
+	  fprintf(f,"P5\n%d %d\n255\n",NTHETA,NRHO);
+	  fwrite(hough_buf,NTHETA,NRHO,f);
+	  fclose(f);
+	}
+	
+	// collect all the points from the image that are in the the
+	// peak of the hough transform
+	extract_line_points(maxtheta,maxrho,x,y,accum);
+	
+	// draw the collected points into the image
+	for(unsigned int i=0;i<x.size();i++){
+	  accum(x[i],y[i])=200;
+	}
+	
+	if(x.size()>4){
+	  double a,b,r2;
+	  if(fabs(theta(maxtheta))>45*M_PI/180){ 
+	    //cout << "vertical line" << endl;
+	    r2=fit_line(y,x,a,b);
+	    if(r2>0.7){
+	    draw_line_vert(a,b,accum);
+	    par_ver.push_back(pair<double,double>(a,b));
+	    cnt_ver.push_back(cnt);
+	    }
+	  }else{
+	    //cout << "horizontal line" << endl;
+	    r2=fit_line(x,y,a,b);
+	    if(r2>0.7){
+	      draw_line_hori(a,b,accum);
+	      par_hor.push_back(pair<double,double>(a,b));
+	      cnt_hor.push_back(cnt);
+	    }
+	  }
+	  if(0)
+	    write_pgm(accum,"accum.pgm");
+	}
       }
     }
-    unload(accum);
-    draw(accum);
-   
+    if(cnt%2==0){ // stop that anoying blinking
+      unload(accum);
+      draw(accum);
+    } else {
+      glRectd(0,0,512,512);
+    }
+    
+    // draw all the fitted lines
+    glColor3d(.8,.2,.3);
+    glBegin(GL_LINES);
+    // ther first entry in par_hor is rubbish .. doesn't matter
+    for(int i=1;i<par_hor.size();i++)
+      draw_hor(par_hor[i]);
+    for(int i=0;i<par_ver.size();i++)
+      draw_ver(par_ver[i]);
+    glEnd();
+    glColor3d(1,1,1);
+
     glTranslated(0,-n,0);
     unload(corrected); draw(corrected);
    
@@ -1105,10 +1251,41 @@ main()
     	    
     glPopMatrix();
     
-    // draw grating in top right
+    // draw halfplanes in top right
     glTranslated(512,0,0);
-    if(cnt>=coord.size())
+    if(cnt>=coord.size()){
       cnt=0;
+      // store horizontal lines and the coordinates that were
+      // displayed into file
+      FILE*f=fopen("hor.dat","w");
+      fprintf(f,"#coord.0 .1 .2 .3 par_hor.a .b\n");  
+      for(int i=0;i<cnt_hor.size();i++){
+	fprintf(f,"%d %d %d %d %g %g\n",
+		coord[cnt_hor[i]].a[0],
+		coord[cnt_hor[i]].a[1],
+		coord[cnt_hor[i]].a[2],
+		coord[cnt_hor[i]].a[3],
+		par_hor[cnt_hor[i]].first,
+		par_hor[cnt_hor[i]].second);
+      }
+      fclose(f);
+     
+      // store vertical lines and the coordinates that were
+      // displayed into file
+      f=fopen("ver.dat","w");
+      fprintf(f,"#coord.0 .1 .2 .3 par_ver.a .b\n");  
+      for(int i=0;i<cnt_ver.size();i++){
+	fprintf(f,"%d %d %d %d %g %g\n",
+		coord[cnt_ver[i]].a[0],
+		coord[cnt_ver[i]].a[1],
+		coord[cnt_ver[i]].a[2],
+		coord[cnt_ver[i]].a[3],
+		par_ver[cnt_ver[i]].first,
+		par_ver[cnt_ver[i]].second);
+      }
+      fclose(f);
+      
+    }
     int*q=coord[cnt].a;
     //glRecti(0,0,700,g.h);
     glRecti(q[0],q[1],q[2],q[3]);
